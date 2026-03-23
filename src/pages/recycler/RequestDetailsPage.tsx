@@ -1,380 +1,268 @@
-import React, { useState } from 'react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
-import Layout from '@/components/layout/Layout';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
-import { Separator } from '@/components/ui/separator';
-import { 
-  ArrowLeft, 
-  Building2, 
-  MapPin, 
-  Package, 
-  Scale, 
-  Calendar, 
-  Check, 
+import React, { useEffect, useState } from "react";
+import { Link, useParams } from "react-router-dom";
+import Layout from "@/components/layout/Layout";
+import { Button } from "@/components/ui/button";
+import StatusBadge from "@/components/shared/StatusBadge";
+import MaterialBadge from "@/components/shared/MaterialBadge";
+import { useToast } from "@/hooks/use-toast";
+
+import {
+  ArrowLeft,
+  Building2,
+  MapPin,
+  Package,
+  Scale,
+  Calendar,
+  Check,
   X,
-  Phone,
-  CheckCircle,
-  ShieldCheck,
-  Cpu,
-  Image as ImageIcon,
-  FileCheck,
-} from 'lucide-react';
-import { mockRecyclingRequests, mockManufacturers } from '@/lib/mockData';
-import { useToast } from '@/hooks/use-toast';
-import StatusBadge from '@/components/shared/StatusBadge';
-import MaterialBadge from '@/components/shared/MaterialBadge';
+} from "lucide-react";
+
+import { doc, getDoc, updateDoc, Timestamp } from "firebase/firestore";
+import { db } from "@/firebase/firebase";
+
+/* ---------------------------------------
+   TYPES
+---------------------------------------- */
+
+interface RecyclingRequest {
+  id: string;
+  manufacturerId: string;
+  recyclerId: string;
+  wasteType: string;
+  quantity: number;
+  unit: "kg" | "tons";
+  pickupDate?: Timestamp | null;
+  notes?: string;
+  status: "pending" | "accepted" | "rejected" | "completed";
+  createdAt: Timestamp;
+}
+
+interface ManufacturerProfile {
+  companyName: string;
+  location?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+}
+
+/* ---------------------------------------
+   COMPONENT
+---------------------------------------- */
 
 const RecyclerRequestDetailsPage: React.FC = () => {
   const { id } = useParams();
-  const navigate = useNavigate();
   const { toast } = useToast();
-  const request = mockRecyclingRequests.find(r => r.id === id) || mockRecyclingRequests[0];
-  const manufacturer = mockManufacturers.find(m => m.id === request?.manufacturerId);
-  
-  const [requestStatus, setRequestStatus] = useState(request?.status || 'pending');
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [contactApproved, setContactApproved] = useState(request?.contactApproved || false);
 
-  // Mock AI classification data
-  const aiClassification = {
-    primaryMaterial: request?.materialType || 'PVC',
-    confidence: 87,
-    detectedMaterials: [
-      { type: request?.materialType || 'PVC', confidence: 87, isPrimary: true },
-      { type: 'Aluminum', confidence: 12, isPrimary: false },
-    ],
+  const [request, setRequest] = useState<RecyclingRequest | null>(null);
+  const [manufacturer, setManufacturer] =
+    useState<ManufacturerProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  /* ---------------------------------------
+     FETCH REQUEST + MANUFACTURER
+  ---------------------------------------- */
+  useEffect(() => {
+    if (!id) return;
+
+    const fetchData = async () => {
+      try {
+        // 1️⃣ Fetch recycling request
+        const requestSnap = await getDoc(doc(db, "recyclingRequests", id));
+
+        if (!requestSnap.exists()) {
+          setLoading(false);
+          return;
+        }
+
+        const requestData: RecyclingRequest = {
+          id: requestSnap.id,
+          ...(requestSnap.data() as Omit<RecyclingRequest, "id">),
+        };
+
+        setRequest(requestData);
+
+        // 2️⃣ Fetch manufacturer profile using manufacturerId
+        if (requestData.manufacturerId) {
+          const manuSnap = await getDoc(
+            doc(db, "manufacturers", requestData.manufacturerId)
+          );
+
+          if (manuSnap.exists()) {
+            setManufacturer(manuSnap.data() as ManufacturerProfile);
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching request details:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [id]);
+
+  /* ---------------------------------------
+     UPDATE STATUS
+  ---------------------------------------- */
+  const updateStatus = async (status: "accepted" | "rejected") => {
+    if (!id) return;
+
+    try {
+      await updateDoc(doc(db, "recyclingRequests", id), { status });
+
+      setRequest((prev) => (prev ? { ...prev, status } : prev));
+
+      toast({
+        title: `Request ${status}`,
+        description: `You have ${status} this request.`,
+      });
+    } catch (error) {
+      console.error("Error updating status:", error);
+      toast({
+        title: "Update Failed",
+        description: "Something went wrong.",
+        variant: "destructive",
+      });
+    }
   };
 
-  const handleAccept = async () => {
-    setIsProcessing(true);
-    await new Promise(resolve => setTimeout(resolve, 800));
-    setRequestStatus('accepted');
-    setIsProcessing(false);
-    toast({
-      title: "Request Accepted",
-      description: "You have accepted this recycling request.",
-    });
-  };
+  /* ---------------------------------------
+     LOADING / ERROR STATES
+  ---------------------------------------- */
 
-  const handleReject = async () => {
-    setIsProcessing(true);
-    await new Promise(resolve => setTimeout(resolve, 800));
-    setRequestStatus('rejected');
-    setIsProcessing(false);
-    toast({
-      title: "Request Rejected",
-      description: "You have rejected this recycling request.",
-    });
-  };
+  if (loading) {
+    return (
+      <Layout>
+        <div className="p-10 text-center">Loading request details…</div>
+      </Layout>
+    );
+  }
 
-  const handleApproveContact = async () => {
-    setIsProcessing(true);
-    await new Promise(resolve => setTimeout(resolve, 800));
-    setContactApproved(true);
-    setIsProcessing(false);
-    toast({
-      title: "Contact Approved",
-      description: "Manufacturer can now view your contact details.",
-    });
-  };
+  if (!request) {
+    return (
+      <Layout>
+        <div className="p-10 text-center">Request not found</div>
+      </Layout>
+    );
+  }
+
+  /* ---------------------------------------
+     UI
+  ---------------------------------------- */
 
   return (
     <Layout>
-      <div className="container mx-auto px-4 py-8 max-w-5xl">
+      <div className="container mx-auto px-4 py-8 max-w-5xl space-y-6">
+        {/* Back */}
+        <Button variant="ghost" size="sm" asChild>
+          <Link to="/recycler/dashboard">
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Back to Dashboard
+          </Link>
+        </Button>
+
         {/* Header */}
-        <div className="mb-8">
-          <Button variant="ghost" size="sm" asChild className="mb-4 hover:bg-muted">
-            <Link to="/recycler/dashboard">
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Dashboard
-            </Link>
-          </Button>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <h1 className="text-2xl md:text-3xl font-bold text-foreground">Request Details</h1>
-              <p className="text-muted-foreground mt-1">Request ID: {request?.id}</p>
-            </div>
-            <StatusBadge status={requestStatus} />
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold">Recycling Request</h1>
+            <p className="text-sm text-muted-foreground">
+              Request ID: {request.id}
+            </p>
           </div>
+          <StatusBadge status={request.status} />
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Main Info */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Request Summary Card */}
-            <Card className="shadow-sm hover:shadow-md transition-shadow">
-              <CardHeader className="pb-4">
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <Building2 className="h-5 w-5 text-primary" />
-                  Manufacturer Information
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center justify-between py-2 border-b border-border/50">
-                  <span className="text-muted-foreground">Company Name</span>
-                  <span className="font-medium text-foreground">{manufacturer?.companyName || request?.manufacturerName}</span>
-                </div>
-                <div className="flex items-center justify-between py-2 border-b border-border/50">
-                  <span className="text-muted-foreground">Location</span>
-                  <span className="flex items-center gap-1.5 text-foreground">
-                    <MapPin className="h-4 w-4 text-muted-foreground" />
-                    {request?.location}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between py-2">
-                  <span className="text-muted-foreground">Request Date</span>
-                  <span className="flex items-center gap-1.5 text-foreground">
-                    <Calendar className="h-4 w-4 text-muted-foreground" />
-                    {new Date(request?.createdAt || '').toLocaleDateString()}
-                  </span>
-                </div>
-              </CardContent>
-            </Card>
+        {/* Manufacturer Information */}
+        <div className="bg-card border rounded-xl p-6">
+          <h2 className="font-semibold mb-3 flex items-center gap-2">
+            <Building2 className="h-5 w-5 text-primary" />
+            Manufacturer Information
+          </h2>
 
-            {/* Waste Details Section */}
-            <Card className="shadow-sm hover:shadow-md transition-shadow">
-              <CardHeader className="pb-4">
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <Package className="h-5 w-5 text-primary" />
-                  Waste Details
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="grid sm:grid-cols-2 gap-4">
-                  <div className="bg-muted/30 rounded-lg p-4">
-                    <p className="text-sm text-muted-foreground mb-1">Material Type</p>
-                    <MaterialBadge material={request?.materialType || 'PVC'} />
-                  </div>
-                  <div className="bg-muted/30 rounded-lg p-4">
-                    <p className="text-sm text-muted-foreground mb-1">Quantity</p>
-                    <p className="font-semibold text-foreground flex items-center gap-2">
-                      <Scale className="h-4 w-4 text-muted-foreground" />
-                      {request?.quantity} {request?.unit}
-                    </p>
-                  </div>
-                </div>
-                
-                {/* Waste Images */}
-                <div>
-                  <p className="text-sm font-medium text-foreground mb-3 flex items-center gap-2">
-                    <ImageIcon className="h-4 w-4 text-muted-foreground" />
-                    Waste Images
-                  </p>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                    <div className="aspect-square rounded-lg overflow-hidden border border-border bg-muted/30 shadow-inner">
-                      <img 
-                        src={request?.imageUrl || '/placeholder.svg'} 
-                        alt="Waste material" 
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    <div className="aspect-square rounded-lg overflow-hidden border border-border bg-muted/30 shadow-inner">
-                      <img 
-                        src="/placeholder.svg" 
-                        alt="Waste material 2" 
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+          {manufacturer ? (
+            <>
+              <p className="font-medium text-lg">
+                {manufacturer.companyName}
+              </p>
 
-            {/* AI Classification Info */}
-            <Card className="shadow-sm hover:shadow-md transition-shadow border-primary/20 bg-gradient-to-br from-primary/5 to-transparent">
-              <CardHeader className="pb-4">
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <Cpu className="h-5 w-5 text-primary" />
-                  AI Classification Results
-                </CardTitle>
-                <CardDescription>
-                  Material identification based on image analysis
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                {/* Primary Classification */}
-                <div className="bg-card rounded-lg p-4 border border-border shadow-inner">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-sm font-medium text-foreground">Primary Material</span>
-                    <MaterialBadge material={aiClassification.primaryMaterial} />
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-between text-sm mb-1.5">
-                      <span className="text-muted-foreground">Confidence Level</span>
-                      <span className="font-medium text-primary">{aiClassification.confidence}%</span>
-                    </div>
-                    <Progress value={aiClassification.confidence} className="h-2" />
-                  </div>
-                </div>
-
-                {/* Detected Materials */}
-                <div>
-                  <p className="text-sm font-medium text-foreground mb-3">Detected Material Types</p>
-                  <div className="space-y-2">
-                    {aiClassification.detectedMaterials.map((mat, idx) => (
-                      <div 
-                        key={idx} 
-                        className={`flex items-center justify-between p-3 rounded-lg border ${
-                          mat.isPrimary 
-                            ? 'border-primary/30 bg-primary/5' 
-                            : 'border-border bg-muted/20'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <MaterialBadge material={mat.type} size="sm" />
-                          {mat.isPrimary && (
-                            <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
-                              Primary
-                            </span>
-                          )}
-                        </div>
-                        <span className="text-sm font-medium text-muted-foreground">
-                          {mat.confidence}%
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <p className="text-xs text-muted-foreground bg-muted/30 p-3 rounded-lg">
-                  Material identification is based on image analysis and may require further validation.
+              {manufacturer.location && (
+                <p className="flex items-center gap-1 text-muted-foreground mt-1">
+                  <MapPin className="h-4 w-4" />
+                  {manufacturer.location}
                 </p>
-              </CardContent>
-            </Card>
-
-            {/* Contact Sharing */}
-            {requestStatus === 'accepted' && request?.contactRequested && !contactApproved && (
-              <Card className="border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/30 shadow-sm">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-amber-800 dark:text-amber-200">
-                    <Phone className="h-5 w-5" />
-                    Contact Request Pending
-                  </CardTitle>
-                  <CardDescription className="text-amber-700 dark:text-amber-300">
-                    Manufacturer has requested your contact details
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-amber-700 dark:text-amber-300 mb-4">
-                    By approving, the manufacturer will be able to see your email and phone number.
-                  </p>
-                  <Button onClick={handleApproveContact} disabled={isProcessing} className="gap-2">
-                    <CheckCircle className="h-4 w-4" />
-                    Approve Contact Sharing
-                  </Button>
-                </CardContent>
-              </Card>
-            )}
-
-            {contactApproved && (
-              <Card className="border-primary/30 bg-primary/5 shadow-sm">
-                <CardContent className="py-4">
-                  <div className="flex items-center gap-3">
-                    <CheckCircle className="h-5 w-5 text-primary" />
-                    <span className="font-medium text-foreground">Contact details shared with manufacturer</span>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-          </div>
-
-          {/* Sidebar */}
-          <div className="space-y-6">
-            {/* Timeline */}
-            <Card className="shadow-sm">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <Calendar className="h-5 w-5 text-primary" />
-                  Timeline
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center gap-3 text-sm">
-                  <div className="w-2 h-2 rounded-full bg-primary" />
-                  <div className="flex-1">
-                    <p className="font-medium text-foreground">Request Created</p>
-                    <p className="text-muted-foreground">{new Date(request?.createdAt || '').toLocaleDateString()}</p>
-                  </div>
-                </div>
-                {requestStatus === 'accepted' && (
-                  <div className="flex items-center gap-3 text-sm">
-                    <div className="w-2 h-2 rounded-full bg-primary" />
-                    <div className="flex-1">
-                      <p className="font-medium text-foreground">Accepted</p>
-                      <p className="text-muted-foreground">{new Date().toLocaleDateString()}</p>
-                    </div>
-                  </div>
-                )}
-                {requestStatus === 'rejected' && (
-                  <div className="flex items-center gap-3 text-sm">
-                    <div className="w-2 h-2 rounded-full bg-destructive" />
-                    <div className="flex-1">
-                      <p className="font-medium text-foreground">Rejected</p>
-                      <p className="text-muted-foreground">{new Date().toLocaleDateString()}</p>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Actions */}
-            {requestStatus === 'pending' && (
-              <Card className="shadow-sm">
-                <CardHeader>
-                  <CardTitle className="text-lg">Actions</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <Button 
-                    onClick={handleAccept} 
-                    disabled={isProcessing} 
-                    className="w-full gap-2"
-                  >
-                    <Check className="h-4 w-4" />
-                    Accept Request
-                  </Button>
-                  <Button 
-                    variant="outline" 
-                    onClick={handleReject} 
-                    disabled={isProcessing}
-                    className="w-full gap-2 text-destructive hover:text-destructive hover:bg-destructive/10"
-                  >
-                    <X className="h-4 w-4" />
-                    Reject Request
-                  </Button>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Status Card for accepted/rejected */}
-            {requestStatus !== 'pending' && (
-              <Card className={`shadow-sm ${
-                requestStatus === 'accepted' 
-                  ? 'border-primary/30 bg-primary/5' 
-                  : 'border-destructive/30 bg-destructive/5'
-              }`}>
-                <CardContent className="py-6">
-                  <div className="text-center">
-                    {requestStatus === 'accepted' ? (
-                      <>
-                        <CheckCircle className="h-10 w-10 mx-auto text-primary mb-2" />
-                        <p className="font-semibold text-foreground">Request Accepted</p>
-                        <p className="text-sm text-muted-foreground mt-1">Awaiting processing</p>
-                      </>
-                    ) : (
-                      <>
-                        <X className="h-10 w-10 mx-auto text-destructive mb-2" />
-                        <p className="font-semibold text-foreground">Request Rejected</p>
-                        <p className="text-sm text-muted-foreground mt-1">No further action required</p>
-                      </>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-          </div>
+              )}
+            </>
+          ) : (
+            <p className="text-muted-foreground">
+              Loading manufacturer details...
+            </p>
+          )}
         </div>
+
+        {/* Waste Details */}
+        <div className="bg-card border rounded-xl p-6">
+          <h2 className="font-semibold mb-4 flex items-center gap-2">
+            <Package className="h-5 w-5 text-primary" />
+            Waste Details
+          </h2>
+
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div>
+              <p className="text-sm text-muted-foreground mb-1">
+                Material Type
+              </p>
+              <MaterialBadge material={request.wasteType} />
+            </div>
+
+            <div>
+              <p className="text-sm text-muted-foreground mb-1">Quantity</p>
+              <p className="flex items-center gap-2 font-medium">
+                <Scale className="h-4 w-4 text-muted-foreground" />
+                {request.quantity} {request.unit}
+              </p>
+            </div>
+
+            {request.pickupDate && (
+              <div>
+                <p className="text-sm text-muted-foreground mb-1">
+                  Preferred Pickup Date
+                </p>
+                <p className="flex items-center gap-2 font-medium">
+                  <Calendar className="h-4 w-4 text-muted-foreground" />
+                  {request.pickupDate.toDate().toLocaleDateString()}
+                </p>
+              </div>
+            )}
+          </div>
+
+          {request.notes && request.notes.trim() !== "" && (
+            <div className="mt-4">
+              <p className="text-sm text-muted-foreground mb-1">Notes</p>
+              <p className="text-sm whitespace-pre-line">
+                {request.notes}
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Actions */}
+        {request.status === "pending" && (
+          <div className="flex justify-end gap-3">
+            <Button
+              variant="outline"
+              className="text-destructive"
+              onClick={() => updateStatus("rejected")}
+            >
+              <X className="h-4 w-4 mr-1" />
+              Reject
+            </Button>
+
+            <Button onClick={() => updateStatus("accepted")}>
+              <Check className="h-4 w-4 mr-1" />
+              Accept
+            </Button>
+          </div>
+        )}
       </div>
     </Layout>
   );
